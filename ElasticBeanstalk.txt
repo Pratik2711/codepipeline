@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: 2010-09-09
+Resources: 
+  NewVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+        CidrBlock: 10.0.0.0/16
+        EnableDnsHostnames: 'true'
+        EnableDnsSupport: 'true'
+        
+  NewSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+        AvailabilityZone: us-east-2a
+        VpcId: !Ref NewVpc
+        CidrBlock: 10.0.0.0/24
+        
+  NewSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+        AvailabilityZone: us-east-2b
+        VpcId: !Ref NewVpc
+        CidrBlock: 10.0.10.1/24
+
+  NewInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    DependsOn: NewVpc
+
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+        VpcId: !Ref NewVpc
+        InternetGatewayId: !Ref NewInternetGateway
+    
+  SubnetRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+        VpcId: !Ref NewVpc
+        
+  SubnetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachInternetGateway
+    Properties:
+        RouteTableId: !Ref SubnetRouteTable
+        DestinationCidrBlock: 0.0.0.0/0
+        GatewayId: !Ref NewInternetGateway
+        
+  PublicSubnet1RouteTableAssociation:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+          SubnetId: !Ref NewSubnet1
+          RouteTableId: !Ref SubnetRouteTable
+     
+  PublicSubnet2RouteTableAssociation:
+        Type: AWS::EC2::SubnetRouteTableAssociation
+        Properties:
+          SubnetId: !Ref NewSubnet2
+          RouteTableId: !Ref SubnetRouteTable
+        
+  SecurityGroupForEbs:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: Creating Security Group for elastic beanstalk
+        VpcId: !Ref NewVpc
+        SecurityGroupIngress:
+            - IpProtocol: TCP
+              FromPort: 22
+              ToPort: 22
+              CidrIp: 0.0.0.0/0
+
+  ElasticBeanstalkApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+        Description: "Elastic Beanstalk demo application"
+    
+  ElasticBeanstalkApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+        ApplicationName: !Ref ElasticBeanstalkApplication
+        Description: "Application version setting"
+        SourceBundle: 
+            S3Bucket: elasticbeanstalk-samples-111
+            S3Key: tomcat.zip
+
+  NewConfigTemplate: 
+    Type: AWS::ElasticBeanstalk::ConfigurationTemplate
+    Properties: 
+        ApplicationName: !Ref ElasticBeanstalkApplication
+        Description: "my sample configuration template"
+        SolutionStackName: "64bit Amazon Linux 2 v4.2.18 running Tomcat 8.5 Corretto 11"
+        OptionSettings: 
+          - 
+            Namespace: "aws:autoscaling:asg"
+            OptionName: MinSize
+            Value: 1
+            
+          - Namespace: "aws:autoscaling:asg"
+            OptionName: MaxSize
+            Value: 1
+            
+          - Namespace: "aws:elasticbeanstalk:environment"
+            OptionName: "EnvironmentType"
+            Value: "LoadBalanced"
+        
+          - Namespace: aws:ec2:vpc
+            OptionName: VPCId
+            Value: !Ref NewVpc
+            
+          - Namespace: aws:ec2:vpc
+            OptionName: Subnets
+            Value: !Join [ ",", [ !Ref NewSubnet1, !Ref NewSubnet2 ] ]
+              
+          - Namespace: aws:autoscaling:launchconfiguration
+            OptionName: SecurityGroups
+            Value: !Ref SecurityGroupForEbs
+            
+          - Namespace: aws:ec2:vpc
+            OptionName: AssociatePublicIpAddress
+            Value: true
+            
+          - Namespace: aws:autoscaling:launchconfiguration
+            OptionName: IamInstanceProfile
+            Value: !Ref ElasticBeanstalkInstanceProfile
+            
+          - Namespace: aws:autoscaling:launchconfiguration
+            OptionName: InstanceType
+            Value: t2.micro
+          
+  ElasticBeanstalkEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+        ApplicationName: !Ref ElasticBeanstalkApplication
+        Description: AWS ElasticBeanstalk Environment for Prod
+        TemplateName: !Ref NewConfigTemplate
+        VersionLabel: !Ref ElasticBeanstalkApplicationVersion
+        
+  ElasticBeanstalkIAMRole:
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: 
+                - ec2.amazonaws.com
+                - s3.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+  
+  ElasticBeanstalkInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      Roles: 
+        - !Ref ElasticBeanstalkIAMRole
